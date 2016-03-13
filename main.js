@@ -1,5 +1,61 @@
 var google = require ('googleapis');
 var fs = require('fs');
+//var readline = require('readline');
+var readlineSync = require('readline-sync');
+
+var depthpipe = 4;
+var outpipe = "logstats.txt";
+var titleLine = "\nchannelId , channelName , views , likes , ratio , duration , comments , age";
+var re_depth = /--depth=(\d+)/i;
+var re_out = /--output=([A-Za-z0-9_\.\-]+)/i;
+process.argv.forEach(function(val) {
+    var depthParam = val.match(re_depth);
+    if(depthParam !== null){
+        //console.log("type of param depth : "+ (typeof depthParam[1]));
+        depthpipe = depthParam[1];
+    }
+    var outParam = val.match(re_out);
+    if(outParam !== null){
+        //console.log("type of param out : "+ (typeof outParam[1]));
+        outpipe = outParam[1];
+
+
+    }
+    else if (val == "--help") {
+        console.log("Proper Usage: node main.js");
+        console.log("    --depth=n           Sets max depth of exploration per channel");
+        console.log("    --output=filename   use file 'filename' for output");
+        console.log("    --help              Help menu");
+        console.log("");
+        process.exit(0);
+    }
+});
+
+try {
+    var stats = fs.statSync(outpipe);
+    console.log("output file exists");
+    // Wait for user's response.
+    var answer = readlineSync.question('Do you want to overwrite(o)?append(a)? ');
+    if (answer == "o") {
+        fs.writeFileSync(outpipe,titleLine,"utf8");
+    }
+} catch (err) {
+    if(err.code == 'ENOENT') {
+        console.log("output file doesn't exists, will be created");
+        try {
+            fs.writeFileSync(outpipe,titleLine,"utf8");
+        }catch(e){
+            console.log("could not write title line to file.");
+        }
+    } else {
+        console.log("output file doesn't exists or something else happened : ", err.code);
+        try {
+            fs.writeFileSync(outpipe,titleLine,"utf8");
+        }catch(e){
+            console.log("could not write title line to file.");
+        }
+    }
+}
 var api_key_file;
 try {
     api_key_file = fs.readFileSync('yt_api_key.txt','utf8');
@@ -50,8 +106,10 @@ var quota_check = function(){
     }
     if ((now-last_20s_check)/1000 > 20) {
         console.log("testing 20s quota");
+
         last_20s_check = now;
         var tmpQuota = quota_20s;
+        console.log("quota 20s : "+tmpQuota+"/"+MAX_20S);
         quota_20s = 0;
         if (tmpQuota > MAX_20S) {
             return false;
@@ -70,7 +128,7 @@ function search_youtube (query, callback) {
         part: 'snippet',
         type: 'video',
         maxResults: 4,
-        order: 'viewCount',
+        order: 'date',
         safeSearch: 'none'
     };
     if (query.q !== undefined) {
@@ -99,7 +157,8 @@ function search_youtube (query, callback) {
             id: res[index].id.videoId,
             title: res[index].snippet.title || '',
             channelTitle: res[index].snippet.channelTitle,
-            channelId: res[index].snippet.channelId
+            channelId: res[index].snippet.channelId,
+            timeSincePublished: Math.floor((Date.now() - Date.parse(res[index].snippet.publishedAt))/1000)
           };
           console.log("Qt: "+quota_total+" fetching details for video "+ index + "("+video.title+")");
 
@@ -188,7 +247,7 @@ function search_youtube (query, callback) {
   }
 }
 
-var like_view_analyzer = function(err, videos){
+var like_view_analyzer = function(err, videos, callback){
     if (err !== null) {
         console.error(err);
         return;
@@ -198,10 +257,11 @@ var like_view_analyzer = function(err, videos){
         max_ratio : 0,
         avg_ratio : null
     };
+    console.log("like/view analyzer start");
     var dataPoints = [];
     var cumulViews = 0;
     var cumulLikes = 0;
-    fs.appendFileSync('logstats.txt',"\nchannelName , views , likes , ratio , duration , comments", 'utf8');
+    //fs.appendFileSync(outpipe,"\nchannelName , views , likes , ratio , duration , comments , age", 'utf8');
     for (var i = 0; i < videos.length; i++) {
         var ratio = videos[i].likes/videos[i].views;
         if (ratio < stats.min_ratio) {
@@ -212,30 +272,79 @@ var like_view_analyzer = function(err, videos){
         }
         cumulLikes+=videos[i].likes;
         cumulViews+=videos[i].views;
-        console.log(ratio + "\n" + "views : " + videos[i].views);
+        //console.log(ratio + "\n" + "views : " + videos[i].views);
         var statsPoint = {
+            channelId:videos[i].channelId,
             channelName:videos[i].channelTitle,
             views: videos[i].views,
             likes: videos[i].likes,
             ratio: ratio,
             duration : videos[i].duration,
-            comments: videos[i].comments
+            comments: videos[i].comments,
+            age: videos[i].timeSincePublished
         };
         dataPoints.push(statsPoint);
-        fs.appendFileSync('logstats.txt',"\n"+
+        fs.appendFileSync(outpipe,"\n"+
+        statsPoint.channelId+" , "+
         statsPoint.channelName+" , "+
         statsPoint.views+" , "+
         statsPoint.likes+" , "+
         statsPoint.ratio+" , "+
         statsPoint.duration+" , "+
-        statsPoint.comments,
+        statsPoint.comments+" , "+
+        statsPoint.age,
          'utf8');
     }
     stats.avg_ratio = cumulLikes/cumulViews;
 
     console.log(stats);
+    callback();
 };
 
 //search sequence
 start_time = Date.now();
-search_youtube({channel:'UCXIYLgIp6DYZHjmUUUXErmg', maxResults: 50},like_view_analyzer);
+//search_youtube({channel:'UCXIYLgIp6DYZHjmUUUXErmg', maxResults: 50},like_view_analyzer);
+
+var defaultPost = function(err, videos, callback){
+    if (err) {
+        console.error(err);
+    }
+    if (videos) {
+        console.log("loaded "+videos.length+" videos.");
+    }
+    callback();
+};
+var chainSearch = function(params){
+    var options = {};
+    options.depth = params.depth || 4;
+    options.channelIds = params.channelIds || ['UCXIYLgIp6DYZHjmUUUXErmg'];
+    options.postAction = params.postAction || defaultPost;
+    var calendar = [];
+    var scheduler = function(index){
+        if (index == -1) {//init calendar
+            console.log("initialising scheduling jobs...");
+            for (var i = 0; i < options.channelIds.length; i++) {
+                console.log("defining schedule for channel "+options.channelIds[i]);
+                var func1 = function(j){
+                    console.log("executing Task "+j+" on channel " + options.channelIds[j]);
+                    search_youtube({channel:options.channelIds[j], maxResults: options.depth}, function(err, videos) {
+                        options.postAction(err, videos, function(){
+                            scheduler(j+1);
+                        });
+                    });
+                };
+                calendar.push(func1);
+            }
+            console.log("... Done.");
+            scheduler(0);
+        }else if(index < calendar.length){
+
+            calendar[index](index);
+        }else if (index >= calendar.length) {
+            console.log("No job left. Exiting scheduler.");
+        }
+    };
+    scheduler(-1);
+};
+
+chainSearch({depth: depthpipe, channelIds: channel_ids, postAction:like_view_analyzer});

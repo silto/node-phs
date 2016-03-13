@@ -1,0 +1,24 @@
+{
+  "name": "node-phs",
+  "version": "1.0.0",
+  "description": "a node JS youtube statistics tool",
+  "main": "main.js",
+  "dependencies": {
+    "googleapis": "^2.1.7",
+    "readline-sync": "^1.4.1"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "node main.js --help"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silto/node-phs.git"
+  },
+  "author": "silto",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/silto/node-phs/issues"
+  },
+  "homepage": "https://github.com/silto/node-phs#readme"
+}
