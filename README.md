@@ -1,2 +1,2 @@
 # node-phs
-nodeJS personal home server
+nodeJS youtube statistics exctractor. For research purposes, under development.
