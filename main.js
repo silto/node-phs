@@ -63,7 +63,7 @@ var openFiles = function(){
         process.exit(1);
     };
 
-    var outOpen = new Promise((resolve, reject) => {
+    var outOpenProm = function(resolve, reject){
         fs.stat(outpipe,(err, stats) => {
             if(err){
                 if(err.code == 'ENOENT') {
@@ -102,51 +102,56 @@ var openFiles = function(){
                 });
             }
         });
-    })
+    };
+
+    var apiKeyOpenProm = function(resolve, reject){
+        fs.readFile('yt_api_key.txt','utf8', (err,api_key_file) => {
+            if(err){
+                if (err.code === 'ENOENT') {
+                    reject('Key file not found!');
+                }else{
+                    reject("unknown error opening api key file.");
+                }
+
+            }else{
+                let key_regexp = /[A-Za-z0-9\-]{30,}/;
+                let api_key = key_regexp.exec(api_key_file);
+                if (api_key === null) {
+                    reject("google API key not found in provided file");
+                }else{
+                    resolve(api_key[0]);
+                    
+                }
+            }
+        });
+    };
+
+    var openChannelListProm = function(resolve, reject){
+        fs.readFile('yt_ids.txt',"utf8",(err, data) => {
+            if (err) {
+                reject(err);
+            }else{
+                let channels = data.split("\n");
+                while (channels[channels.length - 1] === "" || channels[channels.length - 1] == " ") {
+                    channels.pop();
+                }
+                console.log(channels.length+" channels loaded");
+                channel_ids = channels;
+                resolve();
+            }
+        });
+    }
+
+    var outOpen = new Promise(outOpenProm)
     .then(() => {
         console.log("Success opening output file.");
-        var apiKeyOpen = new Promise((resolve, reject) => {
 
-            fs.readFile('yt_api_key.txt','utf8', (err,api_key_file) => {
-                if(err){
-                    if (err.code === 'ENOENT') {
-                        reject('Key file not found!');
-                    }else{
-                        reject("unknown error opening api key file.");
-                    }
-
-                }else{
-                    let key_regexp = /[A-Za-z0-9\-]{30,}/;
-                    let api_key = key_regexp.exec(api_key_file);
-                    if (api_key === null) {
-                        reject("google API key not found in provided file");
-                    }else{
-                        resolve(api_key[0]);
-                        
-                    }
-                }
-            });
-        })
+        var apiKeyOpen = new Promise(apiKeyOpenProm)
         .then((api_key) => {
             youtube_api_key = api_key;
             console.log("Success opening API key file.");
 
-            var channelListOpen = new Promise((resolve, reject) => {
-                fs.readFile('yt_ids.txt',"utf8",(err, data) => {
-                    if (err) {
-                        reject(err);
-                    }else{
-                        let channels = data.split("\n");
-                        while (channels[channels.length - 1] === "" || channels[channels.length - 1] == " ") {
-                            channels.pop();
-                        }
-                        console.log(channels.length+" channels loaded");
-                        channel_ids = channels;
-                        resolve();
-                    }
-                });
-
-            })
+            var channelListOpen = new Promise(openChannelListProm)
             .then(API_init)
             .catch((err) => { 
                 console.error("non-critical error reading channel list :\n"+err);
@@ -365,20 +370,26 @@ var chainSearch = function(params){
     options.channelIds = params.channelIds || ['UCXIYLgIp6DYZHjmUUUXErmg'];
     options.postAction = params.postAction || defaultPost;
     var calendar = [];
+
+
     var scheduler = function(index){
         if (index == -1) {//init calendar
             console.log("initialising scheduling jobs...");
             for (var i = 0; i < options.channelIds.length; i++) {
                 console.log("defining schedule for channel "+options.channelIds[i]);
-                var func1 = function(j){
+
+                calendar.push((j) => {
                     console.log("executing Task "+j+" on channel " + options.channelIds[j]);
-                    search_youtube({channel:options.channelIds[j], maxResults: options.depth}, function(err, videos) {
-                        options.postAction(err, videos, function(){
+                    search_youtube(
+                        {channel:options.channelIds[j], 
+                        maxResults: options.depth}, 
+                        (err, videos) => {
+                        options.postAction(err, videos, () => {
                             scheduler(j+1);
                         });
                     });
-                };
-                calendar.push(func1);
+                });
+
             }
             console.log("... Done.");
             scheduler(0);
@@ -389,6 +400,7 @@ var chainSearch = function(params){
             console.log("No job left. Exiting scheduler.");
         }
     };
+
     scheduler(-1);
 };
 
