@@ -11,7 +11,7 @@ const readline = require('readline');
 
 var depthpipe = 4;
 var outpipe = "logstats.txt";
-var titleLine = "\nchannelId , channelName , views , likes , ratio , duration , comments , age";
+var titleLine = "\nchannelId , channelName , views , views_log , views_log_round , likes , ratio , duration , duration_min , comments , age , avg_ratio , min_ratio , max_ratio";
 
 
 var re_depth = /--depth=(\d+)/i;
@@ -23,8 +23,11 @@ var youtube = null;
 var channel_ids = ['UCXIYLgIp6DYZHjmUUUXErmg'];
 
 var dataPoints = [];
+const TIME_CATS = [60,50,40,30,20,15,10,8,6,5,4,3,2,1,0];
+var time_table = {};
+var views_table = {};
 
-//variables de temporisation
+//quota limitation variables
 const MAX_DAILY = 50000000;
 const MAX_100S = 300000;
 const MAX_20S  = Math.min(MAX_100S/100, MAX_DAILY/(24*3600))*20;
@@ -299,57 +302,126 @@ function search_youtube (query, callback) {
     }
 }
 
-var like_view_analyzer = function(err, videos, callback){
+var like_view_analyzer = function(err, vid_list, callback){
     if (err !== null) {
         console.error(err);
         return;
     }
+
     var stats = {
         min_ratio : 10000,
         max_ratio : 0,
-        avg_ratio : null
+        avg_ratio : null,
+        cumulViews : 0,
+        cumulLikes : 0
     };
     console.log("like/view analyzer start");
-    var cumulViews = 0;
-    var cumulLikes = 0;
-    //fs.appendFileSync(outpipe,"\nchannelName , views , likes , ratio , duration , comments , age", 'utf8');
-    for (var i = 0; i < videos.length; i++) {
-        var ratio = videos[i].likes/videos[i].views;
+
+
+    var statsLoop = function(videos, stats, callback){
+        let vid = videos.shift();
+        let ratio = vid.likes/vid.views;
         if (ratio < stats.min_ratio) {
             stats.min_ratio = ratio;
         }
         if (ratio> stats.max_ratio) {
             stats.max_ratio = ratio;
         }
-        cumulLikes+=videos[i].likes;
-        cumulViews+=videos[i].views;
+        stats.cumulLikes+=vid.likes;
+        stats.cumulViews+=vid.views;
+        let viewsLog = Math.log2(vid.views);
         //console.log(ratio + "\n" + "views : " + videos[i].views);
         var statsPoint = {
-            channelId:videos[i].channelId,
-            channelName:videos[i].channelTitle,
-            views: videos[i].views,
-            likes: videos[i].likes,
+            channelId:vid.channelId,
+            channelName:vid.channelTitle,
+            views: vid.views,
+            viewsLog: viewsLog,
+            viewsLogRounded: Math.round(viewsLog),
+            likes: vid.likes,
             ratio: ratio,
-            duration : videos[i].duration,
-            comments: videos[i].comments,
-            age: videos[i].timeSincePublished
+            duration: vid.duration,
+            durationMin: Math.round(vid.duration/60),
+            comments: vid.comments,
+            age: vid.timeSincePublished
         };
         dataPoints.push(statsPoint);
-        fs.appendFileSync(outpipe,"\n"+
+        fs.appendFile(outpipe,"\n"+
         statsPoint.channelId+" , "+
         statsPoint.channelName+" , "+
         statsPoint.views+" , "+
+        statsPoint.viewsLog+" , "+
+        statsPoint.viewsLogRounded+" , "+
         statsPoint.likes+" , "+
         statsPoint.ratio+" , "+
         statsPoint.duration+" , "+
+        statsPoint.durationMin+" , "+
         statsPoint.comments+" , "+
         statsPoint.age,
-         'utf8');
-    }
-    stats.avg_ratio = cumulLikes/cumulViews;
+         'utf8',
+        () => {
+            if (videos.length > 0) {
+                statsLoop(videos, stats, callback);
+            }else{
+                statsCherry(stats, callback);
+            }
+        });
+    };
 
-    console.log(stats);
-    callback();
+    var statsCherry = function(stats, callback){
+        stats.avg_ratio = stats.cumulLikes/stats.cumulViews;
+        console.log(stats);
+        fs.appendFile(outpipe, 
+            " , "+stats.avg_ratio+" , "+stats.min_ratio+" , "+stats.max_ratio,
+            'utf8',
+            callback);
+    };
+
+
+    if (vid_list.length>0) {
+        statsLoop(vid_list, stats, callback);
+    }else{
+        callback();
+    }
+
+};
+
+var dataAnalysis = function(){
+    console.log("Data Analysis Started.");
+    //console.log(dataPoints);
+    for (let i = dataPoints.length - 1; i >= 0; i--) {
+
+        //average likes per views levels
+        if (views_table[dataPoints[i].viewsLogRounded] == undefined) {
+            views_table[dataPoints[i].viewsLogRounded] = {i:1, likes_moy:dataPoints[i].likes, ratio_moy:dataPoints[i].ratio};
+        }else{
+            views_table[dataPoints[i].viewsLogRounded].likes_moy = (views_table[dataPoints[i].viewsLogRounded].likes_moy * views_table[dataPoints[i].viewsLogRounded].i + dataPoints[i].likes)/(views_table[dataPoints[i].viewsLogRounded].i+1);
+            views_table[dataPoints[i].viewsLogRounded].ratio_moy = (views_table[dataPoints[i].viewsLogRounded].ratio_moy * views_table[dataPoints[i].viewsLogRounded].i + dataPoints[i].ratio)/(views_table[dataPoints[i].viewsLogRounded].i+1);
+            views_table[dataPoints[i].viewsLogRounded].i+=1;
+        }
+        let j=0;
+        while(dataPoints[i].durationMin<TIME_CATS[j]){
+            j++;
+        }
+        //average ratio per content duration levels
+        if (time_table[j] == undefined) {
+            time_table[j] = {cat:TIME_CATS[j], i:1, ratio_moy:dataPoints[i].ratio, variance:0, e_type:0, disp:0};
+        }else{
+            let new_moy = (time_table[j].ratio_moy * time_table[j].i + dataPoints[i].ratio)/(time_table[j].i+1);
+            let new_var = time_table[j].variance + Math.pow(time_table[j].ratio_moy - new_moy, 2) + Math.pow(dataPoints[i].ratio - new_moy, 2)/time_table[j].i;
+            time_table[j].ratio_moy = new_moy;
+            time_table[j].variance = new_var;
+            time_table[j].e_type = Math.sqrt(new_var);
+            time_table[j].disp = time_table[j].e_type/Math.sqrt(time_table[j].i+1);
+            time_table[j].i+=1;
+        }
+    }
+
+    console.log("dataPoints");
+    console.log(dataPoints);
+    console.log("time_table");
+    console.log(time_table);
+    console.log("views_table");
+    console.log(views_table);
 };
 
 //search sequence
@@ -399,6 +471,7 @@ var chainSearch = function(params){
             calendar[index](index);
         }else if (index >= calendar.length) {
             console.log("No job left. Exiting scheduler.");
+            dataAnalysis();
         }
     };
 
