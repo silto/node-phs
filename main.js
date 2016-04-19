@@ -22,6 +22,8 @@ var youtube = null;
 
 var channel_ids = ['UCXIYLgIp6DYZHjmUUUXErmg'];
 
+var dataPoints = [];
+
 //variables de temporisation
 const MAX_DAILY = 50000000;
 const MAX_100S = 300000;
@@ -308,7 +310,6 @@ var like_view_analyzer = function(err, videos, callback){
         avg_ratio : null
     };
     console.log("like/view analyzer start");
-    var dataPoints = [];
     var cumulViews = 0;
     var cumulLikes = 0;
     //fs.appendFileSync(outpipe,"\nchannelName , views , likes , ratio , duration , comments , age", 'utf8');
