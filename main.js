@@ -11,7 +11,7 @@ const readline = require('readline');
 
 var depthpipe = 4;
 var outpipe = "logstats.txt";
-var titleLine = "\nchannelId , channelName , views , views_log , views_log_round , likes , ratio , duration , duration_min , comments , age , avg_ratio , min_ratio , max_ratio";
+var titleLine = "\nchannelId , channelName , channelType , views , views_log , views_log_round , likes , ratio , duration , duration_min , comments , age , avg_ratio , min_ratio , max_ratio";
 
 
 var re_depth = /--depth=(\d+)/i;
@@ -21,11 +21,12 @@ var youtube_api_key = null;
 var youtube = null;
 
 var channel_ids = ['UCXIYLgIp6DYZHjmUUUXErmg'];
+var channel_types = []
 
 var dataPoints = [];
 const TIME_CATS = [60,50,40,30,20,15,10,8,6,5,4,3,2,1,0];
-var time_table = {};
-var views_table = {};
+var time_table = [];
+var views_table = [];
 
 //quota limitation variables
 const MAX_DAILY = 50000000;
@@ -140,8 +141,26 @@ var openFiles = function(){
                 while (channels[channels.length - 1] === "" || channels[channels.length - 1] == " ") {
                     channels.pop();
                 }
-                console.log(channels.length+" channels loaded");
-                channel_ids = channels;
+                let re = /[A-Za-z0-9_-]{24}/;
+                let reType = /type:([A-Z]{1,4})/;
+                let filteredChannels = [];
+                let filteredTypes = [];
+                for (let i = 0; i < channels.length; i++) {
+                    let keyTmp = re.exec(channels[i]);
+                    if (keyTmp !== null) {
+                        let index = filteredChannels.push(keyTmp[0]) - 1;
+                        let typeTmp = reType.exec(channels[i]);
+                        if (typeTmp !== null) {
+                            if (typeTmp[1]!==undefined) {
+                                filteredTypes[index] = typeTmp[1];
+                            }
+                        }
+                    }
+
+                }
+                console.log(filteredChannels.length+" channels loaded");
+                channel_ids = filteredChannels;
+                channel_types = filteredTypes;
                 resolve();
             }
         });
@@ -224,12 +243,16 @@ function search_youtube (query, callback) {
         queryObject.q = query.q;
     }
     if (query.pageToken !== undefined) {
-      queryObject.pageToken = query.pageToken;
+        queryObject.pageToken = query.pageToken;
     }
     if (query.maxResults !==undefined) {
-      queryObject.maxResults = query.maxResults;
+        queryObject.maxResults = query.maxResults;
     }if (query.channel !== undefined) {
-      queryObject.channelId = query.channel;
+        queryObject.channelId = query.channel;
+    }
+    var channelType = null;
+    if (query.channelType !== undefined) {
+        channelType = query.channelType;
     }
     var videos = [];
     var detailsLoop = function(res, index, errors, outfunction){
@@ -247,6 +270,7 @@ function search_youtube (query, callback) {
                 title: res[index].snippet.title || '',
                 channelTitle: res[index].snippet.channelTitle,
                 channelId: res[index].snippet.channelId,
+                channelType: channelType,
                 timeSincePublished: Math.floor((Date.now() - Date.parse(res[index].snippet.publishedAt))/1000)
             };
             console.log("Qt: "+quota_total+" fetching details for video "+ index + "("+video.title+")");
@@ -334,6 +358,7 @@ var like_view_analyzer = function(err, vid_list, callback){
         var statsPoint = {
             channelId:vid.channelId,
             channelName:vid.channelTitle,
+            channelType:vid.channelType,
             views: vid.views,
             viewsLog: viewsLog,
             viewsLogRounded: Math.round(viewsLog),
@@ -348,6 +373,7 @@ var like_view_analyzer = function(err, vid_list, callback){
         fs.appendFile(outpipe,"\n"+
         statsPoint.channelId+" , "+
         statsPoint.channelName+" , "+
+        (statsPoint.channelType===null?"":statsPoint.channelType)+" , "+
         statsPoint.views+" , "+
         statsPoint.viewsLog+" , "+
         statsPoint.viewsLogRounded+" , "+
@@ -416,12 +442,22 @@ var dataAnalysis = function(){
         }
     }
 
-    console.log("dataPoints");
-    console.log(dataPoints);
-    console.log("time_table");
-    console.log(time_table);
-    console.log("views_table");
-    console.log(views_table);
+    // console.log("dataPoints");
+    // console.log(dataPoints);
+    // console.log("time_table");
+    // console.log(time_table);
+    // console.log("views_table");
+    // console.log(views_table);
+    var dataDigest = "\n\nViews Table :\nViews log , nb items , likes avg , ratio avg";
+    views_table.forEach((item, index) => {
+        dataDigest += "\n"+index+" , "+item.i+" , "+item.likes_moy+" , "+item.ratio_moy;
+    });
+    dataDigest+="\n\n Duration Table :\nDuration , nb items , ratio avg , variance , ecart type , dispertion"
+    time_table.forEach((item, index) => {
+        dataDigest += "\n"+item.cat+" , "+item.i+" , "+item.ratio_moy+" , "+item.variance+" , "+item.e_type+" , "+item.disp;
+    });
+
+    fs.appendFile(outpipe,dataDigest,'utf8',() => {console.log("Data Analysis Is Done ans writtent to file.");})
 };
 
 //search sequence
@@ -455,7 +491,8 @@ var chainSearch = function(params){
                     console.log("executing Task "+j+" on channel " + options.channelIds[j]);
                     search_youtube(
                         {channel:options.channelIds[j], 
-                        maxResults: options.depth}, 
+                        maxResults: options.depth,
+                        channelType:channel_types[j]},
                         (err, videos) => {
                         options.postAction(err, videos, () => {
                             scheduler(j+1);
